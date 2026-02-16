@@ -39,8 +39,10 @@ struct InsertSupport<'a2l, 'dbg, 'param> {
     instance_count: u32,
     version: A2lVersion,
     create_typedef: Vec<(&'dbg TypeInfo, usize)>,
+    allow_pointers: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_items(
     a2l_file: &mut A2lFile,
     debug_data: &DebugData,
@@ -49,6 +51,7 @@ pub(crate) fn insert_items(
     target_group: Option<&str>,
     log_msgs: &mut Vec<String>,
     enable_structures: bool,
+    allow_pointers: bool,
 ) {
     let version = A2lVersion::from(&*a2l_file);
     let module = &mut a2l_file.project.module[0];
@@ -77,11 +80,11 @@ pub(crate) fn insert_items(
 
     let mut create_typedef = Vec::new();
     for (sym_name, sym_info, is_calib) in insert_list {
-        if is_simple_type(sym_info.typeinfo)
+        if is_simple_type(sym_info.typeinfo, allow_pointers)
             || sym_info
                 .typeinfo
                 .get_arraytype()
-                .is_some_and(is_simple_type)
+                .is_some_and(|t| is_simple_type(t, allow_pointers))
         {
             if is_calib {
                 match insert_characteristic_sym(
@@ -487,6 +490,7 @@ pub(crate) fn insert_many<'param>(
     log_msgs: &mut Vec<String>,
     enable_structures: bool,
     force_old_arrays: bool,
+    allow_pointers: bool,
 ) {
     let file_version = crate::A2lVersion::from(&*a2l_file);
     let use_new_arrays = !force_old_arrays && file_version >= A2lVersion::V1_7_0;
@@ -508,6 +512,7 @@ pub(crate) fn insert_many<'param>(
         instance_count: 0u32,
         version: file_version,
         create_typedef: Vec::new(),
+        allow_pointers,
     };
     // compile the regular expressions
     for expr in measurement_regexes {
@@ -546,12 +551,17 @@ pub(crate) fn insert_many<'param>(
             | DbgDataType::Struct { .. }
             | DbgDataType::Class { .. }
             | DbgDataType::Union { .. } => {
+                // If allow_pointers is enabled and this is a pointer, treat as simple type
+                if isupp.allow_pointers && matches!(&sym_info.typeinfo.datatype, DbgDataType::Pointer(_, _)) {
+                    check_and_insert_simple_type(&mut isupp, &sym_info, log_msgs);
+                    skip_children = true;
+                }
                 if enable_structures && check_and_insert_instance(&mut isupp, &sym_info, log_msgs) {
                     skip_children = true;
                 }
             }
             DbgDataType::Array { arraytype, .. } => {
-                if is_simple_type(arraytype) {
+                if is_simple_type(arraytype, isupp.allow_pointers) {
                     if check_and_insert_simple_type(&mut isupp, &sym_info, log_msgs) {
                         skip_children = true;
                     }
@@ -611,8 +621,8 @@ pub(crate) fn insert_many<'param>(
     }
 }
 
-fn is_simple_type(typeinfo: &TypeInfo) -> bool {
-    matches!(
+fn is_simple_type(typeinfo: &TypeInfo, allow_pointers: bool) -> bool {
+    let is_basic = matches!(
         &typeinfo.datatype,
         DbgDataType::Enum { .. }
             | DbgDataType::Float
@@ -625,7 +635,8 @@ fn is_simple_type(typeinfo: &TypeInfo) -> bool {
             | DbgDataType::Uint16
             | DbgDataType::Uint32
             | DbgDataType::Uint64
-    )
+    );
+    is_basic || (allow_pointers && matches!(&typeinfo.datatype, DbgDataType::Pointer(_, _)))
 }
 
 fn check_and_insert_simple_type(
@@ -995,6 +1006,7 @@ mod test {
             target_group,
             &mut log_msgs,
             false,
+            false
         );
         assert_eq!(a2l.project.module[0].measurement.len(), 2);
         assert_eq!(a2l.project.module[0].characteristic.len(), 2);
@@ -1013,6 +1025,7 @@ mod test {
             characteristic_symbols,
             target_group,
             &mut log_msgs,
+            false,
             false,
         );
         // verify that the new items were added with a prefix
@@ -1042,6 +1055,7 @@ mod test {
             characteristic_symbols,
             target_group,
             &mut log_msgs,
+            false,
             false,
         );
         for msg in log_msgs {
@@ -1074,6 +1088,7 @@ mod test {
             target_group,
             &mut log_msgs,
             false,
+            false,
         );
         // nothing was added
         assert_eq!(a2l.project.module[0].measurement.len(), 0);
@@ -1092,6 +1107,7 @@ mod test {
             target_group,
             &mut log_msgs,
             true,
+            false,
         );
         // nothing was added
         assert_eq!(a2l.project.module[0].measurement.len(), 0);
@@ -1128,6 +1144,7 @@ mod test {
             target_group,
             &mut log_msgs,
             true,
+            false,
         );
         // the basic types are inserted as MEASUREMENTs and CHARACTERISTICs as in the previous test
         assert_eq!(a2l.project.module[0].measurement.len(), 2);
@@ -1174,6 +1191,7 @@ mod test {
             &mut log_msgs,
             false,
             false,
+            false,
         );
         // ^Measurement_.*$ expands to:
         //   Measurement_Matrix, Measurement_Value, Measurement_Bitfield.bits_1, Measurement_Bitfield.bits_2, Measurement_Bitfield.bits_3
@@ -1200,6 +1218,7 @@ mod test {
             characteristic_regexes,
             target_group,
             &mut log_msgs,
+            false,
             false,
             false,
         );
@@ -1243,6 +1262,7 @@ mod test {
             target_group,
             &mut log_msgs,
             true,
+            false,
             false,
         );
         // of the items matched by the measurement regex, only Measurement_Matrix, Measurement_Value are basic types
@@ -1294,6 +1314,7 @@ mod test {
             &mut log_msgs,
             true,
             false,
+            false,
         );
         assert_eq!(a2l.project.module[0].instance.len(), 5);
         assert_eq!(
@@ -1324,9 +1345,67 @@ mod test {
             target_group,
             &mut log_msgs,
             false,
+            false,
         );
         assert_eq!(a2l.project.module[0].measurement.len(), 0);
         assert_eq!(a2l.project.module[0].characteristic.len(), 0);
+    }
+
+    #[test]
+    fn test_allow_pointers() {
+        let mut a2l_without = a2lfile::new();
+        let debug_data = crate::debuginfo::DebugData::load_dwarf(
+            &OsString::from("fixtures/bin/update_typedef_test.elf"), false
+        )
+        .unwrap();
+
+        let measurement_regexes = vec![r"^val_ptr$", r"^TEST_structptr.*$"];
+        let characteristic_regexes = vec![r"^struct_b\.p.*$"];
+        let mut log_msgs = Vec::new();
+
+        insert_many(
+            &mut a2l_without,
+            &debug_data,
+            &[],
+            &[],
+            measurement_regexes.clone(),
+            characteristic_regexes.clone(),
+            None,
+            &mut log_msgs,
+            false,
+            false,
+            false,
+        );
+
+        // Without flag, pointers should be rejected
+        assert_eq!(a2l_without.project.module[0].measurement.len(), 0);
+        assert_eq!(a2l_without.project.module[0].characteristic.len(), 0);
+
+        // Test with --allow-pointers (pointers should be created)
+        let mut a2l_with = a2lfile::new();
+        let mut log_msgs = Vec::new();
+
+        insert_many(
+            &mut a2l_with,
+            &debug_data,
+            &[],
+            &[],
+            measurement_regexes,
+            characteristic_regexes,
+            None,
+            &mut log_msgs,
+            false,
+            false,
+            true,
+        );
+
+        // With flag, pointers should be created
+        assert!(a2l_with.project.module[0].measurement.len() > 0);
+        assert!(a2l_with.project.module[0].characteristic.len() > 0);
+
+        // Verify specific pointer measurements exist
+        assert!(a2l_with.project.module[0].measurement.iter()
+            .any(|m| m.get_name() == "val_ptr" || m.get_name().starts_with("TEST_structptr")));
     }
 
     #[test]
@@ -1351,6 +1430,7 @@ mod test {
             None,
             &mut log_msgs,
             true,
+            false,
         );
 
         assert_eq!(a2l.project.module[0].instance.len(), 1);

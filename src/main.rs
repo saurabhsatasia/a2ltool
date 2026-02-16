@@ -102,6 +102,9 @@ fn core(args: impl Iterator<Item = OsString>) -> Result<(), String> {
     let force_old_arrays = *arg_matches
         .get_one::<bool>("OLD_ARRAYS")
         .expect("option old-arrays must always exist");
+    let allow_pointers = *arg_matches
+        .get_one::<bool>("ALLOW_POINTERS")
+        .expect("option allow-pointers must always exist");
     let cleanup = *arg_matches
         .get_one::<bool>("CLEANUP")
         .expect("option cleanup must always exist");
@@ -443,6 +446,7 @@ fn core(args: impl Iterator<Item = OsString>) -> Result<(), String> {
                 target_group,
                 &mut log_msgs,
                 enable_structures,
+                allow_pointers,
             );
             for msg in log_msgs {
                 cond_print!(verbose, now, msg);
@@ -506,6 +510,7 @@ fn core(args: impl Iterator<Item = OsString>) -> Result<(), String> {
                 &mut log_msgs,
                 enable_structures,
                 force_old_arrays,
+                allow_pointers,
             );
             for msg in log_msgs {
                 cond_print!(verbose, now, msg);
@@ -820,6 +825,12 @@ The arg --update must be present.")
     .arg(Arg::new("OLD_ARRAYS")
         .help("Force the use of old array notation (e.g. ._2_) even when the a2l version allows the use of new array notation (e.g. [2]).")
         .long("old-arrays")
+        .number_of_values(0)
+        .action(clap::ArgAction::SetTrue)
+    )
+    .arg(Arg::new("ALLOW_POINTERS")
+        .help("Treat pointers as simple types and allow creating MEASUREMENTs/CHARACTERISTICs for pointer variables and arrays of pointers")
+        .long("allow-pointers")
         .number_of_values(0)
         .action(clap::ArgAction::SetTrue)
     )
